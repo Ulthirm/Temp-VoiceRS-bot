@@ -17,4 +17,4 @@ Requirements:
 		- [ ] Configurable TImeout
 	- [ ] Delete any Bot side logging?
 
-![Flowchart](linkToImages.jpg)
+![Flowchart](Images/Flowchart.png)
