@@ -1,8 +1,7 @@
 use once_cell::sync::Lazy;
 use serde::{Deserialize,Serialize};
 use std::{{fs,fs::OpenOptions},{io,io::Write},str::FromStr};
-use swing::Config as LoggerConfig;
-use tracing::{info,debug,error,warn};
+use tracing::{info,debug,error,warn,level_filters::LevelFilter};
 use colored::Colorize;
 use toml::Value;
 
@@ -160,26 +159,21 @@ fn create_config() -> io::Result<()> {
 
 // generate the logging config for each logger implementation across the files
 
-pub fn get_logging_config() {
+pub fn get_logging_config() -> LevelFilter {
     // This might be unnecessary and could probably be directly called in the let level line
     let log_level_str = &CONFIG.logging.level;
     
     // Parse the log level from string, defaulting to 'Debug' if there's an error
     
-    let level = LevelFilter::from_str(log_level_str).unwrap_or_else(|_|{ 
-        println!("{}{}{}{}","Warn:".yellow().bold(), "Unable to parse log level from config: ", log_level_str,". Defaulting to 'Debug'");
-        LevelFilter::Debug
+    let level_filter = LevelFilter::from_str(log_level_str).unwrap_or_else(|_| {
+        eprintln!("Warn: Unable to parse log level from config: {}. Defaulting to 'Debug'", log_level_str);
+        LevelFilter::DEBUG
     });
     
+    println!("{}{}{:?}","Info:".green().bold(), "Logging level: ", level_filter);
 
-    println!("{}{}{:?}","Info:".green().bold(), "Logging level: ", level);
-
-    /*
-    LoggerConfig {
-        level: level,
-        ..Default::default()
-    }
-    */
+    level_filter
+    
 }
 
 
