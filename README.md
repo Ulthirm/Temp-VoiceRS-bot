@@ -17,4 +17,10 @@ Requirements:
 		- [ ] Configurable TImeout
 	- [ ] Delete any Bot side logging?
 
-![Flowchart](Images/Flowchart.png)
+![Flowchart](link.jpg)
+
+# Crates used
+[Serenity](https://crates.io/crates/serenity)
+[tracing](https://crates.io/crates/tracing)
+[Chrono](https://crates.io/crates/chrono)
+[Tokio](https://crates.io/crates/tokio)
