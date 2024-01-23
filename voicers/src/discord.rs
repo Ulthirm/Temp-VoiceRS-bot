@@ -1,65 +1,17 @@
 use crate::{config,commands};
-use serenity::{Client,async_trait,all::{GatewayIntents,EventHandler,Interaction,Context,CreateInteractionResponseMessage,CreateInteractionResponse,Ready,GuildId,Command}};
+use poise::serenity_prelude as serenity;
+use serenity::{Client,async_trait,all::{GatewayIntents,EventHandler,Interaction,CreateInteractionResponseMessage,CreateInteractionResponse,Ready,GuildId,Command}};
 use std::env;
+use std::{sync::Arc,time::Duration,collections::HashMap};
+use tokio::sync::Mutex;
+use tracing::{info,debug,error};
 
-struct Handler;
+// Types used by all command functions
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+pub type Context<'a> = poise::Context<'a, Data, Error>;
 
-#[async_trait]
-impl EventHandler for Handler {
-    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        if let Interaction::Command(command) = interaction {
-            println!("Received command interaction: {command:#?}");
-
-            let content = match command.data.name.as_str() {
-                "ping" => Some(commands::ping::run(&command.data.options())),
-                "id" => Some(commands::id::run(&command.data.options())),
-                "attachmentinput" => Some(commands::attachmentinput::run(&command.data.options())),
-                "modal" => {
-                    commands::modal::run(&ctx, &command).await.unwrap();
-                    None
-                },
-                _ => Some("not implemented :(".to_string()),
-            };
-
-            if let Some(content) = content {
-                let data = CreateInteractionResponseMessage::new().content(content);
-                let builder = CreateInteractionResponse::Message(data);
-                if let Err(why) = command.create_response(&ctx.http, builder).await {
-                    println!("Cannot respond to slash command: {why}");
-                }
-            }
-        }
-    }
-
-    async fn ready(&self, ctx: Context, ready: Ready) {
-        println!("{} is connected!", ready.user.name);
-
-        let guild_id = GuildId::new(
-            env::var("GUILD_ID")
-                .expect("Expected GUILD_ID in environment")
-                .parse()
-                .expect("GUILD_ID must be an integer"),
-        );
-
-        let commands = guild_id
-            .set_commands(&ctx.http, vec![
-                commands::ping::register(),
-                commands::id::register(),
-                commands::numberinput::register(),
-                commands::attachmentinput::register(),
-                commands::modal::register(),
-            ])
-            .await;
-
-        println!("I now have the following guild slash commands: {commands:#?}");
-
-        let guild_command =
-            Command::create_global_command(&ctx.http, commands::wonderful_command::register())
-                .await;
-
-        println!("I created the following global slash command: {guild_command:#?}");
-    }
-}
+// Custom user data passed to all command functions
+pub struct Data {}
 
 pub async fn start_discord_bot() -> Result<(), Box<dyn std::error::Error>> {
     // get the config
@@ -70,13 +22,28 @@ pub async fn start_discord_bot() -> Result<(), Box<dyn std::error::Error>> {
 
     // TODO: Remove this debug line
     // Security risk after testing
-    log::debug!("Discord token: {}", token);
+    debug!("Discord token: {}", token);
 
     let intents = GatewayIntents::empty();
 
+    let framework = poise::Framework::builder()
+    .setup(move |ctx, _ready, framework| {
+        Box::pin(async move {
+            println!("Logged in as {}", _ready.user.name);
+            poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+            Ok(Data {})
+        })
+    })
+    .options(poise::FrameworkOptions {
+        //, commands::createvc(), commands::setmodrole(), commands::setusermod()
+        commands: vec![commands::help::help(), commands::createvc::createvc(), commands::setmodrole::setmodrole(), commands::setusermod::setusermod()],
+        ..Default::default()
+    })
+    .build();
+
     // Create a new instance of the Client
     let client_result = Client::builder(token, intents)
-        .event_handler(Handler)
+        .framework(framework)
         .await;
 
     let mut client = match client_result {
@@ -88,7 +55,7 @@ pub async fn start_discord_bot() -> Result<(), Box<dyn std::error::Error>> {
     match client.start().await {
         Ok(_) => Ok(()),
         Err(e) => {
-            log::error!("Client error: {:?}", e);
+            error!("Client error: {:?}", e);
             Err(Box::new(e))
         }
     }

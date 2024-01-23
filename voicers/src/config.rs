@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize,Serialize};
 use std::{{fs,fs::OpenOptions},{io,io::Write},str::FromStr};
 use swing::Config as LoggerConfig;
-use log::LevelFilter;
+use tracing::{info,debug,error,warn};
 use colored::Colorize;
 use toml::Value;
 
@@ -159,23 +159,29 @@ fn create_config() -> io::Result<()> {
 }
 
 // generate the logging config for each logger implementation across the files
-pub fn get_logging_config() -> LoggerConfig {
+
+pub fn get_logging_config() {
     // This might be unnecessary and could probably be directly called in the let level line
     let log_level_str = &CONFIG.logging.level;
     
     // Parse the log level from string, defaulting to 'Debug' if there's an error
+    
     let level = LevelFilter::from_str(log_level_str).unwrap_or_else(|_|{ 
         println!("{}{}{}{}","Warn:".yellow().bold(), "Unable to parse log level from config: ", log_level_str,". Defaulting to 'Debug'");
         LevelFilter::Debug
     });
+    
 
     println!("{}{}{:?}","Info:".green().bold(), "Logging level: ", level);
 
+    /*
     LoggerConfig {
         level: level,
         ..Default::default()
     }
+    */
 }
+
 
 // generate the features config for each feature implementation across the files
 pub fn get_features_config() -> &'static Features {
@@ -274,7 +280,7 @@ fn repair_config(config_str: String) -> io::Result<()> {
 // Might be useful for a future feature to update the config without restarting the bot
 // which matters since this is a Discord bot
 pub fn _update_config(key: &str, value: &str, operation: &str) -> io::Result<()> {
-    log::debug!("Updating config key: {} to value: {}", key, value);
+    debug!("Updating config key: {} to value: {}", key, value);
     let config_path = "config.toml";
     let config_str = fs::read_to_string(config_path)?;
 
@@ -294,7 +300,7 @@ pub fn _update_config(key: &str, value: &str, operation: &str) -> io::Result<()>
                 } else if operation == "remove" {
                     roles.retain(|x| x.as_str().unwrap() != value);
                 } else {
-                    log::warn!("Invalid operation: {}", operation);
+                    warn!("Invalid operation: {}", operation);
                     return Ok(());
                 }
         
@@ -310,7 +316,7 @@ pub fn _update_config(key: &str, value: &str, operation: &str) -> io::Result<()>
                 } else if operation == "remove" {
                     users.retain(|x| x.as_str().unwrap() != value);
                 } else {
-                    log::warn!("Invalid operation: {}", operation);
+                    warn!("Invalid operation: {}", operation);
                     return Ok(());
                 }
         
@@ -322,7 +328,7 @@ pub fn _update_config(key: &str, value: &str, operation: &str) -> io::Result<()>
                 config["voice"]["global_timeout"] = Value::Integer(timeout_value);
             },
             _ => {
-                log::warn!("Invalid key: {}", key);
+                warn!("Invalid key: {}", key);
                 return Ok(());
             }
         }       
