@@ -13,6 +13,7 @@ pub struct Config {
     pub moderation: Moderation,
     pub voice: Voice,
     pub discord: Discord,
+    pub misc: Misc,
 }
 
 // This is a struct for the logging level
@@ -48,6 +49,20 @@ pub struct Features {
 pub struct Discord {
     #[serde(default = "default_discord")]
     pub bot_token : String,
+}
+
+#[derive(Serialize,Deserialize,Debug)]
+pub struct Misc {
+    #[serde(default = "default_discord")]
+    pub vc_rules: String,
+    #[serde(default = "default_discord")]
+    pub vc_custom_prefix: String,
+    #[serde(default = "default_discord")]
+    pub vc_custom_suffix: String,
+    #[serde(default = "default_features")]
+    pub vc_mandatory_roles: Vec<String>,
+    #[serde(default = "default_discord")]
+    pub vc_no_permission: String,
 }
 
 // Default values for the config for the deserializer
@@ -150,6 +165,16 @@ fn create_config() -> io::Result<()> {
     # This is required for the bot to function
     # default: ""
     bot_token = ""
+
+    [misc]
+    # This defined the custom rules link for the bot
+    # This is optional
+    # default: ""
+    vc_rules = ""
+    vc_custom_prefix = ""
+    vc_custom_suffix = ""
+    vc_mandatory_roles = ["",""]
+    vc_no_permission = ""
     "#;
 
     let config_bytes = config_data.as_bytes();
@@ -181,6 +206,10 @@ pub fn get_logging_config() -> LevelFilter {
 pub fn get_features_config() -> &'static Features {
     &CONFIG.features
     // eventually we might want to do some processing to verify the features are valid or not blank
+}
+
+pub fn get_vcmisc_config() -> &'static Misc {
+    &CONFIG.misc
 }
 
 fn verify_config(config: &Config) {
@@ -252,12 +281,22 @@ fn repair_config(config_str: String) -> io::Result<()> {
     let discord: Discord = toml::from_str(&current_config_str)
         .unwrap_or_else(|_| Discord { bot_token: default_discord() });
 
+    let misc: Misc = toml::from_str(&current_config_str)
+        .unwrap_or_else(|_| Misc { 
+            vc_rules: default_discord(),
+            vc_custom_prefix: default_discord(),
+            vc_custom_suffix: default_discord(),
+            vc_mandatory_roles: default_features(),
+            vc_no_permission: default_discord(),
+        });
+
     let rebuilt_config = Config {
         logging: logging,
         features: features,
         moderation: moderation,
         voice: voice,
         discord: discord,
+        misc: misc,
     };
 
     let mut file = OpenOptions::new()

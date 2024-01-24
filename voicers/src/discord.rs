@@ -36,7 +36,7 @@ pub async fn start_discord_bot() -> Result<(), Box<dyn std::error::Error>> {
     })
     .options(poise::FrameworkOptions {
         //, commands::createvc(), commands::setmodrole(), commands::setusermod()
-        commands: vec![commands::help::help(), commands::createvc::createvc(), commands::setmodrole::setmodrole(), commands::setusermod::setusermod()],
+        commands: vec![commands::help::help(), commands::createvc::entrance(), commands::setmodrole::setmodrole(), commands::setusermod::setusermod()],
         ..Default::default()
     })
     .build();
