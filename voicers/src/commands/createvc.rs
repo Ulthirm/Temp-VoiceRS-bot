@@ -252,11 +252,13 @@ async fn create_voice_channel(
             let now_i64 = now as i64; // Convert `u64` to `i64`
 
             debug!("Insert table query for channel ID: {}", channel_id_i64);
-            let insert_table_query =
-                sqlx::query("INSERT INTO users (vc_id, last_update, user_count) VALUES (?, ?, ?)")
-                    .bind(channel_id_i64)
-                    .bind(now_i64)
-                    .bind(0);
+            let insert_table_query = sqlx::query(
+                "INSERT INTO users (vc_id, guild_id, last_update, user_count) VALUES (?, ?, ?, ?)",
+            )
+            .bind(channel_id_i64)
+            .bind(i64::from(guild_id))
+            .bind(now_i64)
+            .bind(0);
 
             // Execute the query
             debug!("Executing insert table query");

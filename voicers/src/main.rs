@@ -37,6 +37,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let create_table_query = r#"
     CREATE TABLE IF NOT EXISTS users (
         vc_id INTEGER PRIMARY KEY,
+        guild_id INTEGER NOT NULL,
         last_update INTEGER NOT NULL,
         user_count INTEGER NOT NULL 
         );

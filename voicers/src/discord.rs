@@ -1,4 +1,5 @@
 use crate::{commands, config};
+use poise::futures_util::TryStreamExt;
 use poise::serenity_prelude as serenity;
 //use serenity::{Client,async_trait,all::{GatewayIntents,EventHandler,Interaction,CreateInteractionResponseMessage,CreateInteractionResponse,Ready,GuildId,Command}};
 use sqlx::SqlitePool;
@@ -12,9 +13,23 @@ use tracing::{debug, error, info};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 
+//database struct
+#[derive(sqlx::FromRow)]
+struct User {
+    vc_id: i64,
+    guild_id: i64,
+    last_update: i64,
+    user_count: i32,
+}
+
+enum CustomEvent {
+    PollingDeleteVC { vc_id: i64, guild_id: i64 },
+}
+
 // Custom user data passed to all command functions
 pub struct Data {
     pub pool: Arc<SqlitePool>,
+    custom_event_sender: tokio::sync::mpsc::Sender<CustomEvent>,
 }
 
 pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn std::error::Error>> {
@@ -30,9 +45,11 @@ pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn st
 
     let data = Data {
         pool: sqlite.clone(),
+        custom_event_sender: tokio::sync::mpsc::channel(100).0,
     };
 
-    let intents = serenity::GatewayIntents::GUILD_VOICE_STATES | serenity::GatewayIntents::non_privileged();
+    let intents =
+        serenity::GatewayIntents::GUILD_VOICE_STATES | serenity::GatewayIntents::non_privileged();
 
     let framework = poise::Framework::builder()
         .setup(move |ctx, _ready, framework| {
@@ -40,6 +57,7 @@ pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn st
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(Data {
                     pool: sqlite.clone(),
+                    custom_event_sender: tokio::sync::mpsc::channel(100).0,
                 })
             })
         })
@@ -82,7 +100,7 @@ pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn st
 }
 
 async fn polling_event(
-    ctx: &serenity::Context,
+    ctx: poise::Context<'_, Data, Error>,
     event: &serenity::FullEvent,
     _framework: poise::FrameworkContext<'_, Data, Error>,
     data: &Data,
@@ -91,8 +109,9 @@ async fn polling_event(
         serenity::FullEvent::Ready { data_about_bot, .. } => {
             println!("Logged in as {}", data_about_bot.user.name);
             // Start the polling task on ready
-            //tokio::spawn(start_polling());
+            tokio::spawn(start_polling(data.pool.clone()));
         }
+
         serenity::FullEvent::VoiceStateUpdate { old, new } => {
             // Handle voice state updates
 
@@ -148,4 +167,47 @@ async fn polling_event(
     Ok(())
 }
 
-async fn start_polling() {}
+async fn start_polling<'a>(pool: Arc<SqlitePool>) -> Result<(), Error> {
+    debug!("Starting polling task");
+
+    // get the config
+    let config = config::get_config();
+    let voice_timeout = config.voice.global_timeout;
+    let delay = Duration::from_secs(voice_timeout);
+
+    loop {
+        // Sleep for the delay
+        tokio::time::sleep(delay).await;
+        debug!("Polling task woke up");
+
+        // Get the current time in seconds in EPOCH
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // begin processing the VCs recorded in the DB and check for inactivity
+        let query =
+            sqlx::query_as::<_, User>("SELECT vc_id, guild_id, last_update, user_count FROM users");
+        let mut rows = query.fetch(&*pool);
+
+        while let Some(row) = rows.try_next().await.unwrap() {
+            let vc_id = row.vc_id;
+            let guild_id = row.guild_id;
+            let last_update = row.last_update;
+            let user_count = row.user_count;
+
+            // Retrieve and update the user count for the VC in the guild
+            // ... (Implement the logic to interact with the guild and VC)
+
+            // If VC has been vacant for longer than voice_timeout, delete it
+            if user_count == 0 && (now - last_update) > voice_timeout as i64 {
+                info!(
+                    "VC {} in guild {} has been vacant for longer than voice_timeout, deleting it",
+                    vc_id, guild_id
+                );
+                // Delete the VC from the guild
+            }
+        }
+    }
+}
