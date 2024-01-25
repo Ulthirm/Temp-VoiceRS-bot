@@ -12,3 +12,5 @@ Cargo.lock
 voicers/target/
 
 voicers/config.toml
+
+voicers/VCs.db

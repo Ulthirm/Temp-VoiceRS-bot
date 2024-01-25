@@ -1,8 +1,14 @@
 use crate::{config, discord};
+use std::sync::Arc;
+use tracing::error;
+/*
 use serenity::all::{
     ChannelType, CreateChannel, PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId,
     UserId,GuildId
 };
+*/
+
+use poise::serenity_prelude as serenity;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
@@ -19,14 +25,14 @@ async fn is_admin_or_approved(ctx: discord::Context<'_>) -> Result<bool, discord
     let approved_role_ids = &config::get_config().misc.vc_mandatory_roles;
 
     // Convert the string role IDs to RoleId objects, ignoring invalid entries
-    let approved_role_ids: Vec<RoleId> = approved_role_ids
+    let approved_role_ids: Vec<serenity::RoleId> = approved_role_ids
         .iter()
         .filter_map(|id_str| {
             if id_str.is_empty() {
                 None // Skip empty strings
             } else {
                 // Parse the string as u64, and then convert to RoleId
-                id_str.parse::<u64>().ok().map(RoleId::from)
+                id_str.parse::<u64>().ok().map(serenity::RoleId::from)
             }
         })
         .collect();
@@ -42,7 +48,7 @@ async fn is_admin_or_approved(ctx: discord::Context<'_>) -> Result<bool, discord
         Some(member) => {
             let is_admin = member
                 .permissions
-                .map(Permissions::administrator)
+                .map(serenity::Permissions::administrator)
                 .unwrap_or_default();
             let is_approved = member
                 .roles
@@ -67,7 +73,12 @@ async fn is_admin_or_approved(ctx: discord::Context<'_>) -> Result<bool, discord
 }
 
 /// Create a voice channel for the user to join
-#[poise::command(track_edits, slash_command, check = "is_admin_or_approved",rename = "CreateVC")]
+#[poise::command(
+    rename = "createvc",
+    track_edits,
+    slash_command,
+    check = "is_admin_or_approved"
+)]
 pub async fn entrance(
     ctx: discord::Context<'_>,
     #[description = "Private or Public"]
@@ -117,7 +128,7 @@ pub async fn entrance(
 
     debug!("naming new VC as: {}", vcname);
 
-    create_voice_channel(ctx, &vcname, user_ids, role_ids).await?;
+    create_voice_channel(ctx, &vcname, user_ids, role_ids, now).await?;
 
     Ok(())
 }
@@ -125,8 +136,8 @@ pub async fn entrance(
 // Helper function to process a single mention
 fn process_mention(
     mention: Option<&String>,
-    user_ids: &mut Vec<UserId>,
-    role_ids: &mut Vec<RoleId>,
+    user_ids: &mut Vec<serenity::UserId>,
+    role_ids: &mut Vec<serenity::RoleId>,
 ) {
     if let Some(mention) = mention {
         if mention.starts_with("<@&") {
@@ -136,7 +147,7 @@ fn process_mention(
                 .trim_end_matches('>')
                 .parse::<u64>()
             {
-                role_ids.push(RoleId::from(role_id));
+                role_ids.push(serenity::RoleId::from(role_id));
             }
         } else if mention.starts_with("<@") {
             // User mention
@@ -145,7 +156,7 @@ fn process_mention(
                 .trim_end_matches('>')
                 .parse::<u64>()
             {
-                user_ids.push(UserId::from(user_id));
+                user_ids.push(serenity::UserId::from(user_id));
             }
         }
     }
@@ -154,8 +165,9 @@ fn process_mention(
 async fn create_voice_channel(
     ctx: discord::Context<'_>,
     vcname: &str,
-    user_ids: Vec<UserId>, // Vector of up to 5 user IDs
-    role_ids: Vec<RoleId>, // Vector of role IDs
+    user_ids: Vec<serenity::UserId>, // Vector of up to 5 user IDs
+    role_ids: Vec<serenity::RoleId>, // Vector of role IDs
+    now: u64,
 ) -> Result<(), discord::Error> {
     let vcmisc_config = config::get_vcmisc_config();
 
@@ -171,19 +183,19 @@ async fn create_voice_channel(
 
     // Permissions for specific users
     for user_id in user_ids {
-        permissions.push(PermissionOverwrite {
-            allow: Permissions::VIEW_CHANNEL,
-            deny: Permissions::empty(),
-            kind: PermissionOverwriteType::Member(user_id),
+        permissions.push(serenity::PermissionOverwrite {
+            allow: serenity::Permissions::VIEW_CHANNEL,
+            deny: serenity::Permissions::empty(),
+            kind: serenity::PermissionOverwriteType::Member(user_id),
         });
     }
 
     // Permissions for specific roles
     for role_id in role_ids {
-        permissions.push(PermissionOverwrite {
-            allow: Permissions::VIEW_CHANNEL,
-            deny: Permissions::empty(),
-            kind: PermissionOverwriteType::Role(role_id),
+        permissions.push(serenity::PermissionOverwrite {
+            allow: serenity::Permissions::VIEW_CHANNEL,
+            deny: serenity::Permissions::empty(),
+            kind: serenity::PermissionOverwriteType::Role(role_id),
         });
     }
 
@@ -192,11 +204,11 @@ async fn create_voice_channel(
     // Permissions for moderator roles
     for role_id_str in moderator_role_ids {
         if let Ok(role_id) = role_id_str.parse::<u64>() {
-            let role_id = RoleId::from(role_id);
-            permissions.push(PermissionOverwrite {
-                allow: Permissions::VIEW_CHANNEL | Permissions::MANAGE_CHANNELS,
-                deny: Permissions::empty(),
-                kind: PermissionOverwriteType::Role(role_id),
+            let role_id = serenity::RoleId::from(role_id);
+            permissions.push(serenity::PermissionOverwrite {
+                allow: serenity::Permissions::VIEW_CHANNEL | serenity::Permissions::MANAGE_CHANNELS,
+                deny: serenity::Permissions::empty(),
+                kind: serenity::PermissionOverwriteType::Role(role_id),
             });
         }
         // Optionally, handle the case where parsing fails
@@ -212,28 +224,52 @@ async fn create_voice_channel(
     };
 
     // Permissions for the @everyone role
-    permissions.push(PermissionOverwrite {
-        allow: Permissions::empty(),
-        deny: Permissions::VIEW_CHANNEL,
-        kind: PermissionOverwriteType::Role(GuildId::everyone_role(&guild_id)),
+    permissions.push(serenity::PermissionOverwrite {
+        allow: serenity::Permissions::empty(),
+        deny: serenity::Permissions::VIEW_CHANNEL,
+        kind: serenity::PermissionOverwriteType::Role(serenity::GuildId::everyone_role(&guild_id)),
     });
 
     // Permission for the user who sent the request
-    permissions.push(PermissionOverwrite {
-        allow: Permissions::VIEW_CHANNEL,
-        deny: Permissions::empty(),
-        kind: PermissionOverwriteType::Member(ctx.author().id),
+    permissions.push(serenity::PermissionOverwrite {
+        allow: serenity::Permissions::VIEW_CHANNEL,
+        deny: serenity::Permissions::empty(),
+        kind: serenity::PermissionOverwriteType::Member(ctx.author().id),
     });
 
     // Creating the channel builder
-    let builder = CreateChannel::new(vcname)
-        .kind(ChannelType::Voice) // Set the channel type to Voice
+    let vc_builder = serenity::CreateChannel::new(vcname)
+        .kind(serenity::ChannelType::Voice) // Set the channel type to Voice
         .permissions(permissions); // Optional: Set permissions
 
     // Using the builder to create the channel
-    // Replace `guild_id` with the actual guild ID where you want to create the channel
-    
-    guild_id.create_channel(&ctx, builder).await?;
+    match guild_id.create_channel(&ctx, vc_builder).await {
+        Ok(channel) => {
+            // Assuming channel is of type GuildChannel
+            let channel_id_i64 = channel.id.get() as i64; // Convert ChannelId to i64
+
+            let pool = &ctx.data().pool;
+            let now_i64 = now as i64; // Convert `u64` to `i64`
+
+            debug!("Insert table query for channel ID: {}", channel_id_i64);
+            let insert_table_query =
+                sqlx::query("INSERT INTO users (vc_id, last_update, user_count) VALUES (?, ?, ?)")
+                    .bind(channel_id_i64)
+                    .bind(now_i64)
+                    .bind(0);
+
+            // Execute the query
+            debug!("Executing insert table query");
+            match insert_table_query.execute(&**pool).await {
+                Ok(_) => debug!("Successfully inserted data into users table"),
+                Err(e) => error!("Failed to insert data into users table: {:?}", e),
+            }
+        }
+        Err(e) => {
+            error!("Failed to create voice channel: {:?}", e);
+            // Handle the error as needed
+        }
+    }
 
     Ok(())
 }
