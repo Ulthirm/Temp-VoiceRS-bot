@@ -1,12 +1,10 @@
 use crate::{commands, config};
 use poise::futures_util::TryStreamExt;
 use poise::serenity_prelude as serenity;
-//use serenity::{Client,async_trait,all::{GatewayIntents,EventHandler,Interaction,CreateInteractionResponseMessage,CreateInteractionResponse,Ready,GuildId,Command}};
+use serenity::model::id::ChannelId;
 use sqlx::SqlitePool;
-use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info};
 
 // Types used by all command functions
@@ -29,7 +27,6 @@ enum CustomEvent {
 // Custom user data passed to all command functions
 pub struct Data {
     pub pool: Arc<SqlitePool>,
-    custom_event_sender: tokio::sync::mpsc::Sender<CustomEvent>,
 }
 
 pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn std::error::Error>> {
@@ -43,13 +40,10 @@ pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn st
     // Security risk after testing
     debug!("Discord token: {}", token);
 
-    let data = Data {
-        pool: sqlite.clone(),
-        custom_event_sender: tokio::sync::mpsc::channel(100).0,
-    };
 
-    let intents =
-        serenity::GatewayIntents::GUILD_VOICE_STATES | serenity::GatewayIntents::non_privileged();
+    let intents = serenity::GatewayIntents::GUILD_VOICE_STATES
+        | serenity::GatewayIntents::non_privileged()
+        | serenity::GatewayIntents::GUILD_MEMBERS;
 
     let framework = poise::Framework::builder()
         .setup(move |ctx, _ready, framework| {
@@ -57,7 +51,6 @@ pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn st
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(Data {
                     pool: sqlite.clone(),
-                    custom_event_sender: tokio::sync::mpsc::channel(100).0,
                 })
             })
         })
@@ -100,7 +93,7 @@ pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn st
 }
 
 async fn polling_event(
-    ctx: poise::Context<'_, Data, Error>,
+    ctx: &serenity::Context,
     event: &serenity::FullEvent,
     _framework: poise::FrameworkContext<'_, Data, Error>,
     data: &Data,
@@ -108,8 +101,23 @@ async fn polling_event(
     match event {
         serenity::FullEvent::Ready { data_about_bot, .. } => {
             println!("Logged in as {}", data_about_bot.user.name);
+            let (sender, receiver) = tokio::sync::mpsc::channel(100);
+            //let (pollingsyncsender, pollingsyncreceiver) = tokio::sync::mpsc::channel(100);
             // Start the polling task on ready
-            tokio::spawn(start_polling(data.pool.clone()));
+            tokio::spawn(start_polling(
+                data.pool.clone(),
+                sender,
+                ctx.clone(),
+            ));
+
+            let http_clone = Arc::clone(&ctx.http);
+            let pool_clone = data.pool.clone();
+
+            tokio::spawn(handle_polling_delete_event(
+                receiver,
+                http_clone,             
+                pool_clone,
+            ));
         }
 
         serenity::FullEvent::VoiceStateUpdate { old, new } => {
@@ -167,26 +175,76 @@ async fn polling_event(
     Ok(())
 }
 
-async fn start_polling<'a>(pool: Arc<SqlitePool>) -> Result<(), Error> {
+async fn start_polling<'a>(
+    pool: Arc<SqlitePool>,
+    sender: tokio::sync::mpsc::Sender<CustomEvent>,
+    ctx: serenity::Context,
+) -> Result<(), Error> {
     debug!("Starting polling task");
 
     // get the config
     let config = config::get_config();
     let voice_timeout = config.voice.global_timeout;
+    let sync_interval = 4; // Interval for syncing with the database
     let delay = Duration::from_secs(voice_timeout);
+    let mut loop_counter = 0;
 
     loop {
         // Sleep for the delay
         tokio::time::sleep(delay).await;
         debug!("Polling task woke up");
+        loop_counter += 1;
 
-        // Get the current time in seconds in EPOCH
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        if loop_counter == sync_interval {
+            debug!("Syncing with the database");
 
-        // begin processing the VCs recorded in the DB and check for inactivity
+            // Sync the DB with the guilds and VCs
+            let rows = sqlx::query_as::<_, User>(
+                "SELECT vc_id, guild_id, last_update, user_count FROM users",
+            )
+            .fetch_all(&*pool)
+            .await
+            .unwrap();
+            for row in rows {
+                let vc_id = row.vc_id as u64; // Convert to u64 if necessary
+                let guild_id = row.guild_id as u64; // Convert to u64 if necessary
+                let channel_id = serenity::ChannelId::from(vc_id);
+                let guild_id = serenity::GuildId::from(guild_id);
+
+                let current_user_count = get_user_count_in_vc(&ctx.clone(), guild_id, channel_id)
+                    .await
+                    .unwrap();
+
+                info!(
+                    "Syncing VC {} in guild {} with DB user count {}",
+                    vc_id, guild_id, current_user_count
+                );
+
+                // Only update the database if the user count has changed
+                if current_user_count as i32 != row.user_count {
+                    let update_query = sqlx::query::<sqlx::Sqlite>(
+                        "UPDATE users SET user_count = ? WHERE vc_id = ?",
+                    )
+                    .bind(current_user_count as i32)
+                    .bind(vc_id as i64);
+
+                    update_query
+                        .execute(&*pool)
+                        .await
+                        .expect("Failed to execute update");
+                    info!(
+                        "Updated VC {} in guild {} with new user count {}",
+                        vc_id, guild_id, current_user_count
+                    );
+                } else {
+                    info!("No update needed for VC {} in guild {}", vc_id, guild_id);
+                }
+            }
+
+            loop_counter = 0;
+        }
+
+        // Process voice channels for inactivity
         let query =
             sqlx::query_as::<_, User>("SELECT vc_id, guild_id, last_update, user_count FROM users");
         let mut rows = query.fetch(&*pool);
@@ -197,8 +255,10 @@ async fn start_polling<'a>(pool: Arc<SqlitePool>) -> Result<(), Error> {
             let last_update = row.last_update;
             let user_count = row.user_count;
 
-            // Retrieve and update the user count for the VC in the guild
-            // ... (Implement the logic to interact with the guild and VC)
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
 
             // If VC has been vacant for longer than voice_timeout, delete it
             if user_count == 0 && (now - last_update) > voice_timeout as i64 {
@@ -207,6 +267,61 @@ async fn start_polling<'a>(pool: Arc<SqlitePool>) -> Result<(), Error> {
                     vc_id, guild_id
                 );
                 // Delete the VC from the guild
+                sender
+                    .send(CustomEvent::PollingDeleteVC { vc_id, guild_id })
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+}
+
+async fn get_user_count_in_vc(
+    ctx: &serenity::Context,
+    guild_id: serenity::GuildId,
+    vc_id: serenity::ChannelId,
+) -> Result<usize, serenity::Error> {
+    // Attempt to access the guild from the cache
+    if let Some(guild) = ctx.cache.guild(guild_id) {
+        // Filter the voice_states for the specific voice channel and count
+        let user_count = guild
+            .voice_states
+            .values()
+            .filter(|voice_state| voice_state.channel_id == Some(vc_id))
+            .count();
+
+        Ok(user_count)
+    } else {
+        Err(serenity::Error::Other("Guild not found in cache"))
+    }
+}
+
+async fn handle_polling_delete_event(
+    mut receiver: tokio::sync::mpsc::Receiver<CustomEvent>,
+    http: Arc<serenity::Http>,
+    pool: Arc<SqlitePool>,
+) {
+    while let Some(event) = receiver.recv().await {
+        match event {
+            CustomEvent::PollingDeleteVC { vc_id, guild_id } => {
+                debug!("Deleting voice channel with ID {} in guild id {}", vc_id, guild_id);
+                // Delete the voice channel
+                match http
+                    .delete_channel(
+                        ChannelId::from(vc_id as u64),
+                        Some("Cleaning up inactive voice channel"),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        // Delete the VC from the DB
+                        let query = sqlx::query("DELETE FROM users WHERE vc_id = ?").bind(vc_id);
+                        query.execute(&*pool).await.unwrap();
+
+                        info!("Deleted voice channel with ID {}", vc_id);
+                    }
+                    Err(why) => error!("Failed to delete voice channel: {:?}", why),
+                }
             }
         }
     }

@@ -118,29 +118,69 @@ pub async fn entrance(
     };
 
     let mut user_ids = Vec::new();
+    let mut denied_users = Vec::new();
     let mut role_ids = Vec::new();
 
-    process_mention(pingadd1.as_ref(), &mut user_ids, &mut role_ids);
-    process_mention(pingadd2.as_ref(), &mut user_ids, &mut role_ids);
-    process_mention(pingadd3.as_ref(), &mut user_ids, &mut role_ids);
-    process_mention(pingadd4.as_ref(), &mut user_ids, &mut role_ids);
-    process_mention(pingadd5.as_ref(), &mut user_ids, &mut role_ids);
+    process_mention(
+        pingadd1.as_ref(),
+        &mut user_ids,
+        &mut role_ids,
+        &mut denied_users,
+        ctx.clone(),
+    )
+    .await;
+    process_mention(
+        pingadd2.as_ref(),
+        &mut user_ids,
+        &mut role_ids,
+        &mut denied_users,
+        ctx.clone(),
+    )
+    .await;
+    process_mention(
+        pingadd3.as_ref(),
+        &mut user_ids,
+        &mut role_ids,
+        &mut denied_users,
+        ctx.clone(),
+    )
+    .await;
+    process_mention(
+        pingadd4.as_ref(),
+        &mut user_ids,
+        &mut role_ids,
+        &mut denied_users,
+        ctx.clone(),
+    )
+    .await;
+    process_mention(
+        pingadd5.as_ref(),
+        &mut user_ids,
+        &mut role_ids,
+        &mut denied_users,
+        ctx.clone(),
+    )
+    .await;
 
     debug!("naming new VC as: {}", vcname);
 
-    create_voice_channel(ctx, &vcname, user_ids, role_ids, now).await?;
+    create_voice_channel(ctx, &vcname, user_ids, role_ids, now, &vctype, denied_users).await?;
 
     Ok(())
 }
 
 // Helper function to process a single mention
-fn process_mention(
+async fn process_mention(
     mention: Option<&String>,
     user_ids: &mut Vec<serenity::UserId>,
     role_ids: &mut Vec<serenity::RoleId>,
+    denied_users: &mut Vec<String>,
+    ctx: discord::Context<'_>,
 ) {
+    debug!("Processing mention: {:?}", mention);
     if let Some(mention) = mention {
         if mention.starts_with("<@&") {
+            debug!("Role mention: {}", mention);
             // Role mention
             if let Ok(role_id) = mention
                 .trim_start_matches("<@&")
@@ -150,16 +190,76 @@ fn process_mention(
                 role_ids.push(serenity::RoleId::from(role_id));
             }
         } else if mention.starts_with("<@") {
+            debug!("User mention: {}", mention);
             // User mention
             if let Ok(user_id) = mention
                 .trim_start_matches("<@")
                 .trim_end_matches('>')
                 .parse::<u64>()
             {
-                user_ids.push(serenity::UserId::from(user_id));
+                let user_id = serenity::UserId::from(user_id);
+
+                // Retrieve the member and check their roles
+                if let Some(guild_id) = ctx.guild_id() {
+                    match guild_id.member(&ctx.discord().http, user_id).await {
+                        Ok(member) => {
+                            debug!("Found member in the guild.");
+
+                            let approved_role_ids = &config::get_config().misc.vc_mandatory_roles;
+
+                            // Convert the string role IDs to RoleId objects, ignoring invalid entries
+                            let approved_role_ids: Vec<serenity::RoleId> = approved_role_ids
+                                .iter()
+                                .filter_map(|id_str| {
+                                    if id_str.is_empty() {
+                                        None // Skip empty strings
+                                    } else {
+                                        // Parse the string as u64, and then convert to RoleId
+                                        id_str.parse::<u64>().ok().map(serenity::RoleId::from)
+                                    }
+                                })
+                                .collect();
+
+                            // Check if the member has any of the required roles
+                            let has_required_role = member
+                                .roles
+                                .iter()
+                                .any(|member_role_id| approved_role_ids.contains(member_role_id));
+
+                            if has_required_role {
+                                debug!("Member has a required role.");
+                                // Member has a required role, add to user_ids
+                                user_ids.push(serenity::UserId::from(user_id));
+                            } else {
+                                // Member doesn't have a required role, add to denied_users
+                                debug!("Member doesn't have a required role.");
+                                if let Some(nickname) = member.nick {
+                                    denied_users.push(nickname);
+                                } else {
+                                    denied_users.push(member.user.name);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to find member in the guild: {:?}", e);
+                        }
+                    }
+                } else {
+                    error!("Guild ID not found in the context.");
+                }
             }
         }
     }
+}
+
+fn build_denied_users_message(denied_users: &[String]) -> String {
+    debug!("denied users: {:?}", denied_users);
+    if denied_users.is_empty() {
+        return "No users were denied.".to_string();
+    }
+
+    let user_list = denied_users.join(", ");
+    format!("The following users were denied: {}", user_list)
 }
 
 async fn create_voice_channel(
@@ -168,6 +268,8 @@ async fn create_voice_channel(
     user_ids: Vec<serenity::UserId>, // Vector of up to 5 user IDs
     role_ids: Vec<serenity::RoleId>, // Vector of role IDs
     now: u64,
+    vctype: &str,
+    denied_users: Vec<String>,
 ) -> Result<(), discord::Error> {
     let vcmisc_config = config::get_vcmisc_config();
 
@@ -175,12 +277,16 @@ async fn create_voice_channel(
     let vccustomprefix = format!("{}", vcmisc_config.vc_custom_prefix);
     let vccustomsuffix = format!("{}", vcmisc_config.vc_custom_suffix);
 
+    debug!("building denied users message");
+    let denied_users_message = build_denied_users_message(&denied_users);
+
     ctx.send(poise::CreateReply::default()
-        .content(format!("{} \nCreating a new voice channel named: {} \n The mods will have direct access to this channel \n Please be sure to follow all the rules and guidelines of the server {} \n{}",vccustomprefix, vcname,vcrules,vccustomsuffix))
+        .content(format!("{} \nCreating a new voice channel named: {} \n The mods will have direct access to this channel \n Please be sure to follow all the rules and guidelines of the server {} \n{} \n{}",vccustomprefix, vcname,vcrules,vccustomsuffix,denied_users_message))
         .ephemeral(true)).await?;
 
     let mut permissions = Vec::new();
 
+    debug!("Adding permissions for users and roles");
     // Permissions for specific users
     for user_id in user_ids {
         permissions.push(serenity::PermissionOverwrite {
@@ -223,12 +329,39 @@ async fn create_voice_channel(
         }
     };
 
+    debug!("verifying VCTYPE");
+    //imagine forgetting to use to_lowercase() and having to debug for 2 hours
+    match vctype.to_lowercase().as_str() {
+        "private" => {
+            permissions.push(serenity::PermissionOverwrite {
+                allow: serenity::Permissions::empty(),
+                deny: serenity::Permissions::VIEW_CHANNEL,
+                kind: serenity::PermissionOverwriteType::Role(serenity::GuildId::everyone_role(
+                    &guild_id,
+                )),
+            });
+        }
+        "public" => {
+            permissions.push(serenity::PermissionOverwrite {
+                allow: serenity::Permissions::VIEW_CHANNEL,
+                deny: serenity::Permissions::empty(),
+                kind: serenity::PermissionOverwriteType::Role(serenity::GuildId::everyone_role(
+                    &guild_id,
+                )),
+            });
+        }
+        _ => {
+            return Err(discord::Error::from("Invalid type"));
+        }
+    }
     // Permissions for the @everyone role
-    permissions.push(serenity::PermissionOverwrite {
-        allow: serenity::Permissions::empty(),
-        deny: serenity::Permissions::VIEW_CHANNEL,
-        kind: serenity::PermissionOverwriteType::Role(serenity::GuildId::everyone_role(&guild_id)),
-    });
+    /*
+        permissions.push(serenity::PermissionOverwrite {
+            allow: serenity::Permissions::empty(),
+            deny: serenity::Permissions::VIEW_CHANNEL,
+            kind: serenity::PermissionOverwriteType::Role(serenity::GuildId::everyone_role(&guild_id)),
+        });
+    */
 
     // Permission for the user who sent the request
     permissions.push(serenity::PermissionOverwrite {
@@ -237,9 +370,21 @@ async fn create_voice_channel(
         kind: serenity::PermissionOverwriteType::Member(ctx.author().id),
     });
 
+    // Retrieve the bot's user ID
+    let bot_user_id = ctx.discord().cache.current_user().id;
+
+    // Permissions for the bot
+    permissions.push(serenity::PermissionOverwrite {
+        allow: serenity::Permissions::MANAGE_CHANNELS | serenity::Permissions::VIEW_CHANNEL,
+        deny: serenity::Permissions::empty(),
+        kind: serenity::PermissionOverwriteType::Member(bot_user_id),
+    });
+
+    debug!("Creating the channel builder");
     // Creating the channel builder
     let vc_builder = serenity::CreateChannel::new(vcname)
         .kind(serenity::ChannelType::Voice) // Set the channel type to Voice
+        .audit_log_reason("Bot created temporary channel") // Optional: Set the audit log reason
         .permissions(permissions); // Optional: Set permissions
 
     // Using the builder to create the channel
