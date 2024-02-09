@@ -40,7 +40,6 @@ pub async fn start_discord_bot(sqlite: Arc<SqlitePool>) -> Result<(), Box<dyn st
     // Security risk after testing
     debug!("Discord token: {}", token);
 
-
     let intents = serenity::GatewayIntents::GUILD_VOICE_STATES
         | serenity::GatewayIntents::non_privileged()
         | serenity::GatewayIntents::GUILD_MEMBERS;
@@ -104,23 +103,20 @@ async fn polling_event(
             let (sender, receiver) = tokio::sync::mpsc::channel(100);
             //let (pollingsyncsender, pollingsyncreceiver) = tokio::sync::mpsc::channel(100);
             // Start the polling task on ready
-            tokio::spawn(start_polling(
-                data.pool.clone(),
-                sender,
-                ctx.clone(),
-            ));
+            tokio::spawn(start_polling(data.pool.clone(), sender, ctx.clone()));
 
             let http_clone = Arc::clone(&ctx.http);
             let pool_clone = data.pool.clone();
 
             tokio::spawn(handle_polling_delete_event(
-                receiver,
-                http_clone,             
-                pool_clone,
+                receiver, http_clone, pool_clone,
             ));
         }
 
         serenity::FullEvent::VoiceStateUpdate { old, new } => {
+            // Get the Misc confit
+            let vcmisc_config = config::get_vcmisc_config();
+
             // Handle voice state updates
 
             debug!("Voice state update: {:?} -> {:?}", old, new);
@@ -138,6 +134,20 @@ async fn polling_event(
                 let channel_id_i64 = channel_id.get() as i64;
                 info!("User joined a voice channel: {}", channel_id_i64);
                 // User joined or moved in a voice channel
+                // Send them the rules
+                // Asynchronous context, make sure to await the ctx.send method
+
+                let text_channel_id = channel_id;
+                let user_id = serenity::UserId::from(new.user_id);
+
+                // Prepare the message content
+                let message_content = format!("<@{}> \n{} The mods will have direct access to this channel \n Please be sure to follow all the rules and guidelines of the server {} \n{}", user_id, vcmisc_config.vc_custom_prefix, vcmisc_config.vc_rules, vcmisc_config.vc_custom_suffix);
+
+                // Send the message to the associated text channel
+                if let Err(e) = text_channel_id.say(&ctx.http, &message_content).await {
+                    error!("Failed to send message to text channel: {:?}", e);
+                }
+
                 // Update the user count and last_update for this channel
                 let query = sqlx::query(
                     "UPDATE users SET last_update = ?, user_count = user_count + 1 WHERE vc_id = ?",
@@ -304,7 +314,10 @@ async fn handle_polling_delete_event(
     while let Some(event) = receiver.recv().await {
         match event {
             CustomEvent::PollingDeleteVC { vc_id, guild_id } => {
-                debug!("Deleting voice channel with ID {} in guild id {}", vc_id, guild_id);
+                debug!(
+                    "Deleting voice channel with ID {} in guild id {}",
+                    vc_id, guild_id
+                );
                 // Delete the voice channel
                 match http
                     .delete_channel(

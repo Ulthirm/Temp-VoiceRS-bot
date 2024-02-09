@@ -272,16 +272,18 @@ async fn create_voice_channel(
     denied_users: Vec<String>,
 ) -> Result<(), discord::Error> {
     let vcmisc_config = config::get_vcmisc_config();
+    let vc_timeout = config::get_config().voice.global_timeout;
 
     let vcrules = format!("{}", vcmisc_config.vc_rules);
     let vccustomprefix = format!("{}", vcmisc_config.vc_custom_prefix);
     let vccustomsuffix = format!("{}", vcmisc_config.vc_custom_suffix);
+    let vc_category = vcmisc_config.vc_category; // Retrieve the category ID from the config
 
     debug!("building denied users message");
     let denied_users_message = build_denied_users_message(&denied_users);
 
     ctx.send(poise::CreateReply::default()
-        .content(format!("{} \nCreating a new voice channel named: {} \n The mods will have direct access to this channel \n Please be sure to follow all the rules and guidelines of the server {} \n{} \n{}",vccustomprefix, vcname,vcrules,vccustomsuffix,denied_users_message))
+        .content(format!("{} \nCreating a new voice channel named: {} \n The mods will have direct access to this channel \n Please be sure to follow all the rules and guidelines of the server {} \n{} \n{} \nCurrent Timeout: {} ms",vccustomprefix, vcname,vcrules,vccustomsuffix,denied_users_message,vc_timeout))
         .ephemeral(true)).await?;
 
     let mut permissions = Vec::new();
@@ -384,6 +386,7 @@ async fn create_voice_channel(
     // Creating the channel builder
     let vc_builder = serenity::CreateChannel::new(vcname)
         .kind(serenity::ChannelType::Voice) // Set the channel type to Voice
+        .category(serenity::ChannelId::from(vc_category)) // Set the category ID
         .audit_log_reason("Bot created temporary channel") // Optional: Set the audit log reason
         .permissions(permissions); // Optional: Set permissions
 

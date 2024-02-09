@@ -67,6 +67,8 @@ pub struct Misc {
     pub vc_mandatory_roles: Vec<String>,
     #[serde(default = "default_discord")]
     pub vc_no_permission: String,
+    #[serde(default = "default_voice")]
+    pub vc_category: u64,
 }
 
 // Default values for the config for the deserializer
@@ -184,6 +186,7 @@ fn create_config() -> io::Result<()> {
     vc_custom_suffix = ""
     vc_mandatory_roles = ["",""]
     vc_no_permission = ""
+    vc_category = ""
     "#;
 
     let config_bytes = config_data.as_bytes();
@@ -310,6 +313,7 @@ fn repair_config(config_str: String) -> io::Result<()> {
         vc_custom_suffix: default_discord(),
         vc_mandatory_roles: default_features(),
         vc_no_permission: default_discord(),
+        vc_category: default_voice(),
     });
 
     let rebuilt_config = Config {
