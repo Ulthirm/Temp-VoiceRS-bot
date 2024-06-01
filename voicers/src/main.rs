@@ -1,10 +1,8 @@
 use sqlx::sqlite::SqlitePool;
-use std::env;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::{thread::sleep, time::Duration};
-use tracing::{debug, error, info, warn, Level};
+use tracing::{debug, info, warn};
 use tracing_subscriber::FmtSubscriber;
 
 // MODULES BABBBBBYYYYYY

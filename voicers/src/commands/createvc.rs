@@ -1,5 +1,4 @@
 use crate::{config, discord};
-use std::sync::Arc;
 use tracing::error;
 /*
 use serenity::all::{
