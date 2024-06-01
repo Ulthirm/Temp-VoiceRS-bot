@@ -7,7 +7,7 @@ use std::{
     {io, io::Write},
 };
 use toml::Value;
-use tracing::{debug, error, info, level_filters::LevelFilter, warn};
+use tracing::{debug, level_filters::LevelFilter, warn};
 
 //expect root Table and configure subtables, osc
 #[derive(Serialize, Deserialize, Debug)]
