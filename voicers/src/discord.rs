@@ -5,6 +5,7 @@ use serenity::model::id::ChannelId;
 use sqlx::SqlitePool;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{sync::Arc, time::Duration};
+use serenity::futures::Stream;
 use tracing::{debug, error, info};
 
 // Types used by all command functions
@@ -255,9 +256,7 @@ async fn start_polling<'a>(
         }
 
         // Process voice channels for inactivity
-        let query =
-            sqlx::query_as::<_, User>("SELECT vc_id, guild_id, last_update, user_count FROM users");
-        let mut rows = query.fetch(&*pool);
+        let mut rows = get_users(&pool);
 
         while let Some(row) = rows.try_next().await.unwrap() {
             let vc_id = row.vc_id;
@@ -276,14 +275,24 @@ async fn start_polling<'a>(
                     "VC {} in guild {} has been vacant for longer than voice_timeout, deleting it",
                     vc_id, guild_id
                 );
-                // Delete the VC from the guild
-                sender
-                    .send(CustomEvent::PollingDeleteVC { vc_id, guild_id })
-                    .await
-                    .unwrap();
+                delete_voice_channel(&sender, vc_id, guild_id).await;
             }
         }
     }
+}
+
+fn get_users(pool: &Arc<sqlx::Pool<sqlx::Sqlite>>) -> std::pin::Pin<Box<dyn Stream<Item = Result<User, sqlx::Error>> + Send + '_>> {
+    let query =
+        sqlx::query_as::<_, User>("SELECT vc_id, guild_id, last_update, user_count FROM users");
+    let mut rows = query.fetch(&**pool);
+    rows
+}
+
+async fn delete_voice_channel(sender: &tokio::sync::mpsc::Sender<CustomEvent>, vc_id: i64, guild_id: i64) {
+    sender
+        .send(CustomEvent::PollingDeleteVC { vc_id, guild_id })
+        .await
+        .unwrap();
 }
 
 async fn get_user_count_in_vc(
